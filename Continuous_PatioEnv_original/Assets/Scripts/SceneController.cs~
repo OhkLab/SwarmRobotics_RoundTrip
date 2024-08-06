@@ -1,0 +1,426 @@
+﻿using UnityEngine;
+using UnityEngine.UI;
+using System.Collections.Generic;
+using System.Threading;
+using MsgPack;
+
+namespace MLPlayer {
+	public class SceneController : MonoBehaviour {
+
+		// singleton
+		protected static SceneController instance;
+		public static SceneController Instance {
+			get {
+				if(instance == null) {
+					instance = (SceneController) FindObjectOfType(typeof(SceneController));
+					if (instance == null) {
+						Debug.LogError("An instance of " + typeof(SceneController) + 
+						               " is needed in the scene, but there is none.");
+					}
+				}
+				return instance;
+			}
+		}
+			
+		[SerializeField] string domain;
+		[SerializeField] string path;
+		[SerializeField] int port;
+		[SerializeField] int TimestepPerEpisode;
+		[SerializeField] int MaxEpisode;
+		[SerializeField] List<Text> texts;
+		[Range(0.1f, 10.0f)]
+		[SerializeField] float timeScale = 1.0f;
+		
+		[SerializeField] List<Agent> agents;
+		private List<IAIClient> clients;
+		private List<Vector3> firstLocation;
+		private int agentReceiveCounter;
+		MsgPack.BoxingPacker packer = new MsgPack.BoxingPacker ();
+		public Dictionary<System.Object, System.Object>order;
+		public static ManualResetEvent received = new ManualResetEvent(false);
+		private Mutex mutAgent;
+
+		string GetUrl(string domain, int port, string path) {
+			return "ws://" + domain + ":" + port.ToString () + "/" + path;
+		}
+
+		private int cycle=0;
+		private int timestep = 0;
+		private int episode = 1;
+		private int arrival=123456789;
+		private int hit_count = 123456789;
+
+		[SerializeField] List<Landmark> landmarks;
+		[SerializeField] float GoalRange;
+		private float dist;
+		private Vector3 tempVec;
+
+		private bool game = true;
+		private int break_count = 0;
+		System.IO.StreamWriter sw;
+
+		public int[]arrival_per_robot;
+		public int[]hit_per_robot;
+		public float[]reward_rate;
+
+
+		enum ExperienceMode {AGGREGATION,DISTRIBUTE}
+		[SerializeField] ExperienceMode experienceMode;
+
+		void Start () {
+			clients = new List<IAIClient> ();
+			firstLocation = new List<Vector3> ();
+			for (int i = 0; i < agents.Count; i++) {
+				firstLocation.Add (agents [i].transform.position);
+				agents [i].SetCameraTag (i);
+			}
+
+			if (experienceMode == ExperienceMode.AGGREGATION) {
+				clients.Add (new AIClient (GetUrl (domain, port, path),
+					OnMessage, agents[0]));	
+			} else if (experienceMode == ExperienceMode.DISTRIBUTE) {
+				int cnt = 0;
+				foreach (var agent in agents) {
+					clients.Add (
+						new AIClient (GetUrl (domain, port + cnt, path),
+							OnMessage, agent));
+					cnt++;
+				}
+			}
+			System.IO.Directory.CreateDirectory (Application.dataPath + "/log");
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/log.txt", true);
+			sw.Write ("start experiment\n");
+			sw.Close ();
+//			StartNewEpisode ();
+			mutAgent = new Mutex();
+			arrival_per_robot = new int[agents.Count];
+			hit_per_robot = new int[agents.Count];
+			reward_rate = new float[7];
+		}
+		
+		void OnMessage(byte[] msg, Agent agent) {
+			mutAgent.WaitOne();
+			if (experienceMode == ExperienceMode.AGGREGATION) {
+				agentReceiveCounter += agents.Count;
+			} else if (experienceMode == ExperienceMode.DISTRIBUTE) {
+				agentReceiveCounter++;
+			}
+			mutAgent.ReleaseMutex();
+
+			order = (Dictionary<System.Object, System.Object>)packer.Unpack (msg);
+
+			var originalKey = new Dictionary<string, byte[]>();
+			foreach (byte[] key in order.Keys) {
+				originalKey.Add (System.Text.Encoding.UTF8.GetString(key), key);
+			}
+
+			string command = System.Text.Encoding.UTF8.GetString((byte[])order [originalKey ["command"]]);
+
+			if (experienceMode == ExperienceMode.AGGREGATION) {
+				for (int i = 0; i < agents.Count; i++) {
+					agents [i].action.Set (command.Substring (i, 1));
+				}
+			} else if (experienceMode == ExperienceMode.DISTRIBUTE) {
+				agent.action.Set (command);
+			}
+
+			if (agentReceiveCounter == agents.Count) {
+				received.Set();
+			}
+		}
+		
+		public void TimeOver() {
+			foreach (var agent in agents) {
+				agent.EndEpisode ();
+			}
+		}
+
+		void StartNewEpisode() {
+			SetTargetList (agents);
+			for (int i = 0; i < agents.Count; i++) {
+				agents [i].transform.position = firstLocation [i];
+				agents [i].transform.rotation = Quaternion.Euler (0f, Random.Range (0f, 360f), 0f);
+				agents [i].StartEpisode ();
+				agents [i].state.distRecord = MeasureRobotToLandmark (agents [i], landmarks [agents[i].TargetInfo()]);
+			}
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/arrival.txt", true);
+			sw.Write ("{0}\n", arrival);
+			sw.Close ();
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/hit.txt", true);
+			sw.Write ("{0}\n", hit_count);
+			sw.Close ();
+
+
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/arrival_per_robot.txt", true);
+			for (int i = 0; i < agents.Count; i++) {
+				sw.Write ("{0},",arrival_per_robot[i]);
+			}
+			sw.Write ("\n");
+			sw.Close ();
+
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/hit_per_robot.txt", true);
+			for (int i = 0; i < agents.Count; i++) {
+				sw.Write ("{0},",hit_per_robot[i]);
+			}
+			sw.Write ("\n");
+			sw.Close ();
+
+			for (int i = 0; i < agents.Count; i++) {
+				for (int j = 0; j < 7; j++) {
+					reward_rate [j] += agents [i].state.reward [j + 1];
+				}
+			}
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/reward_rate.txt", true);
+			for (int i = 0; i < 7; i++) {
+				sw.Write ("{0},",reward_rate[i]);
+			}
+			sw.Write ("\n");
+			sw.Close ();
+
+			arrival = 0;
+			if (texts.Count >= 3) {
+				texts [2].text = "NumArrival : " + arrival.ToString ();
+			}
+			hit_count = 0;
+			arrival_per_robot = new int[agents.Count];
+			hit_per_robot=new int[agents.Count];
+			reward_rate = new float[7];
+		}
+
+		void RecordEpisode(){
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/arrival.txt", true);
+			sw.Write ("{0}\n", arrival);
+			sw.Close ();
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/hit.txt", true);
+			sw.Write ("{0}\n", hit_count);
+			sw.Close ();
+
+
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/arrival_per_robot.txt", true);
+			for (int i = 0; i < agents.Count; i++) {
+				sw.Write ("{0},",arrival_per_robot[i]);
+			}
+			sw.Write ("\n");
+			sw.Close ();
+
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/hit_per_robot.txt", true);
+			for (int i = 0; i < agents.Count; i++) {
+				sw.Write ("{0},",hit_per_robot[i]);
+			}
+			sw.Write ("\n");
+			sw.Close ();
+
+			for (int i = 0; i < agents.Count; i++) {
+				for (int j = 0; j < 7; j++) {
+					reward_rate [j] += agents [i].state.reward [j + 1];
+				}
+			}
+			sw = new System.IO.StreamWriter (Application.dataPath + "/log/reward_rate.txt", true);
+			for (int i = 0; i < 7; i++) {
+				sw.Write ("{0},",reward_rate[i]);
+			}
+			sw.Write ("\n");
+			sw.Close ();
+
+			arrival = 0;
+			if (texts.Count >= 3) {
+				texts [2].text = "NumArrival : " + arrival.ToString ();
+			}
+			hit_count = 0;
+			arrival_per_robot = new int[agents.Count];
+			hit_per_robot=new int[agents.Count];
+			reward_rate = new float[7];
+
+		}
+
+		float MeasureRobotToLandmark(Agent agent,Landmark landmark){
+			tempVec = landmark.transform.position - agent.transform.position;
+			tempVec.y = 0;
+			return tempVec.magnitude;
+		}
+
+		void RewardForApproachToTarget(Agent agent,int robot_num){
+			dist = MeasureRobotToLandmark (agent, landmarks [agent.TargetInfo ()]);
+
+			if (landmarks [agent.TargetInfo ()].LookingCameras.Contains (robot_num.ToString ())) {
+//				agent.state.reward [0] = (agent.state.distRecord - dist) * 5.0f;
+				if (dist < GoalRange) {
+					agent.state.reward [0] += 250;
+					agent.state.reward [5] += 1;
+					agent.SetTarget (landmarks.Count, false, 0);
+					if (texts.Count >= 3) {
+						arrival += 1;
+						texts [2].text = "NumArrival : " + arrival.ToString ();
+						arrival_per_robot [robot_num] += 1;
+					}
+				}
+			} else {
+//				agent.state.reward [0] = 0;
+			}
+			agent.state.distRecord = dist;
+
+			bool f=false;
+			for (int i = 0; i < agent.state.ir [0].Length; i++) {
+				if (agent.state.ir [0] [i] > 128 && !f) {
+//					hit_count++;
+//					agent.state.reward [0] -= 1.0f;
+					agent.state.reward [0] -= 0.5f;
+					agent.state.reward [6] += 1;
+					f = true;
+//					break;
+				}
+				if (agent.state.ir [0] [i] > 252) {
+					hit_count++;
+					agent.state.reward [0] -= 1;
+					agent.state.reward [7] += 1;
+					hit_per_robot [robot_num] += 1;
+					break;
+				}
+			}
+		
+		}
+
+		void FixedUpdate() {
+			if (game) {
+				cycle++;
+				if (cycle >= (MaxEpisode * TimestepPerEpisode) * 10) {
+					Application.Quit ();
+				}
+
+				if (cycle == 1) {
+					StartNewEpisode ();
+				}
+
+				if (cycle % 10 == 1) {
+					Time.timeScale = timeScale;
+
+					timestep++;
+
+					if (timestep == (TimestepPerEpisode * MaxEpisode)) {
+						TimeOver ();
+					}
+					if (timestep % TimestepPerEpisode == 0) {
+//						TimeOver ();
+//						timestep = 1;
+						RecordEpisode ();
+						episode++;
+					}
+
+					if (texts.Count >= 2) {
+						texts [0].text = "Episode : " + episode.ToString ();
+						texts [1].text = "Timestep : " + timestep.ToString ();
+					}
+
+					agentReceiveCounter = 0;
+					received.Reset ();
+					for (int i = 0; i < agents.Count; i++) {
+						agents [i].UpdateState ();
+						RewardForApproachToTarget (agents [i], i);
+					
+						sw = new System.IO.StreamWriter (Application.dataPath + "/log/log.txt", true);
+						sw.Write ("{0},{1},{2},{3},{4},{5},{6},{7}\n",
+							agents [i].transform.position.x,
+							agents [i].transform.position.y,
+							agents [i].transform.position.z,
+							agents [i].transform.rotation.x, 
+							agents [i].transform.rotation.y,
+							agents [i].transform.rotation.z,
+							agents [i].transform.rotation.w,
+							agents [i].TargetInfo ());
+						sw.Close ();
+
+						if (experienceMode == ExperienceMode.DISTRIBUTE) {
+							clients [i].PushAgentState (agents [i].state);
+						}
+					}
+					if (experienceMode == ExperienceMode.AGGREGATION) {
+						clients[0].PushAgentState (conbineState (agents));
+					}
+					received.WaitOne ();
+
+					// TODO all agents have same value
+					if (agents [0].state.endEpisode) {
+						Resources.UnloadUnusedAssets ();
+						game = false;
+					}
+
+					foreach (var agent in agents) {
+						agent.ResetState ();
+					}
+				}
+			} else {
+				for (int i =0;i< agents.Count;i++) {
+					agents [i].action.Set ("0");
+				}
+				break_count++;
+				if (break_count >= 50) {
+					break_count = 0;
+					StartNewEpisode ();
+					game = true;
+				}
+			}
+		}
+		
+		void Update() {
+		}
+
+		State conbineState(List<Agent> agents){
+			State result = new State ();
+			result.image = new byte[agents.Count][];
+			result.reward = new float[agents.Count];
+			if (agents [0].state.depth != null) {
+				result.depth = new byte[agents.Count][];
+			}
+			if (agents [0].state.ir != null) {
+				result.ir = new int[agents.Count][];
+			}
+			if (agents [0].state.ground != null) {
+				result.ground = new int[agents.Count][] ;
+			}
+			if (agents [0].state.target != null) {
+				result.target = new int[agents.Count][];
+			}
+
+			for (int i = 0; i < agents.Count; i++) {
+				result.image [i] = agents [i].state.image [0];
+				result.reward [i] = agents [i].state.reward[0];
+				if (agents [0].state.depth != null) {
+					result.depth [i] = agents [i].state.depth [0];
+				}
+				if (agents [0].state.ir != null) {
+					result.ir [i] = agents [i].state.ir[0];
+				}
+				if (agents [0].state.ground != null) {
+					result.ground [i] = agents [i].state.ground [0];
+				}
+				if (agents [0].state.target != null) {
+					result.target [i] = agents [i].state.target [0];
+				}
+
+			}
+			result.endEpisode = agents [0].state.endEpisode;
+			return result;
+		}
+
+		void SetTargetList(List<Agent> agents){
+//			only two landmark experiment act right
+			List<int> target_list = new List<int> ();
+			for (int i = 0; i < agents.Count / 2; i++) {
+				int j = UnityEngine.Random.Range (0, agents.Count - 1);
+				while (target_list.Contains (j)) {
+					j = UnityEngine.Random.Range (0, agents.Count - 1);
+				}
+				target_list.Add (j);
+			}
+			for (int i = 0; i < agents.Count; i++) {
+				if (target_list.Contains (i)) {
+					agents [i].SetTarget (landmarks.Count, true, 0);
+				} else {
+					agents [i].SetTarget (landmarks.Count, true, 1);
+				}
+			}
+			target_list.Clear ();
+		}
+
+	}
+}

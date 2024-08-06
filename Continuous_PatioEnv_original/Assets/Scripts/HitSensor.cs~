@@ -1,0 +1,65 @@
+﻿using UnityEngine;
+using System.Collections.Generic;
+
+namespace MLPlayer {
+	public class IRSensor : MonoBehaviour{
+		public LayerMask mask;
+        public float SensorRange;
+        public bool display;
+        public bool ModeGroundSensor;
+
+        private float distance;
+        private bool hitFlag;
+        private bool isLandmark;
+
+        void FixedUpdate()
+        {
+            Ray ray = new Ray(transform.position, transform.forward);
+
+            RaycastHit hit;
+
+            if (Physics.Raycast(ray, out hit, SensorRange, mask))
+            {
+                distance = hit.distance;
+                hitFlag = true;
+                if (ModeGroundSensor)
+                {
+                    if (hit.collider.tag == Defs.LANDMARK)
+                    {
+                        isLandmark = true;
+                    }
+                    else
+                    {
+                        isLandmark = false;
+                    }
+                }
+            }else
+            {
+                distance = SensorRange;
+                hitFlag = false;
+            }
+
+            if (display)
+            {
+                Debug.DrawRay(ray.origin, ray.direction * distance, Color.red, 0, true);
+            }
+        }
+
+        public int retunDist()
+        {
+			return (int)((1 - distance / SensorRange) * 255);
+        }
+
+        public int returnFlag()
+        {
+            if (isLandmark)
+            {
+				return (int)255;
+            }
+            else
+            {
+				return (int)0;
+            }
+        }
+	}
+}

@@ -1,4 +1,4 @@
-# SwarmRbotics_RoundTrip
+# SwarmRobotics_RoundTrip
 Round trip task for robotic swarm with Unity.
 
 ## Version

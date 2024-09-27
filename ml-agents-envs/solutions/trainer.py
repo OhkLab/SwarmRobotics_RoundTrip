@@ -21,9 +21,9 @@ class BaseTorchSolution(BaseSolution):
         self.modules_to_learn = []
         self.device = torch.device(device)
 
-    def get_action(self, obs):
+    def get_action(self, robot_index, obs):
         with torch.no_grad():
-            return self._get_action(obs)
+            return self._get_action(robot_index, obs)
 
     def get_params(self):
         params = []
@@ -77,7 +77,7 @@ class BaseTorchSolution(BaseSolution):
                 start = time.time()
                 for i in decision_steps.agent_id:
                     obs = decision_steps.obs[0][i] * 255
-                    action = self.get_action(obs)
+                    action = self.get_action(i, obs)
                     action_tuple = ActionTuple(continuous=np.expand_dims(action, axis=0))
                     self.env.set_action_for_agent(behavior_names[0], i, action_tuple)
                 self.env.step()

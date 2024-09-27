@@ -40,7 +40,7 @@ def main(config):
     while True:
         for i in decision_steps.agent_id:
             obs = decision_steps.obs[0][i] * 255
-            action = agent.get_action(obs)
+            action = agent.get_action(i, obs)
             if i == 0:
                 agent.show_gui(obs, target=0)
             action_tuple = ActionTuple(continuous=np.expand_dims(action, axis=0))

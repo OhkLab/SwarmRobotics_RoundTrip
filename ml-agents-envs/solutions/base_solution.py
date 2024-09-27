@@ -3,7 +3,7 @@ import abc
 
 class BaseSolution(abc.ABC):
     @abc.abstractmethod
-    def get_action(self, obs):
+    def get_action(self, robot_index, obs):
         raise NotImplementedError()
 
     def get_params(self):

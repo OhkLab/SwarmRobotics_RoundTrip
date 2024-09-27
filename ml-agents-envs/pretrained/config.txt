@@ -4,5 +4,6 @@ algo=snes
 init_sigma=1.0
 population_size=36
 
+cnn.num_robots=20
 cnn.act_dim=4
 cnn.feat_dim=128

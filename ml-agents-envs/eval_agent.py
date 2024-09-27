@@ -29,6 +29,7 @@ def main(config):
     agent = CNN(
         device=torch.device('cpu'),
         file_name=config.app_path,
+        num_robots=20,
         act_dim=4,
         feat_dim=128
     )

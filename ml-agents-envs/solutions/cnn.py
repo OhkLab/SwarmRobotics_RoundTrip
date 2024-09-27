@@ -9,12 +9,13 @@ import torch.nn as nn
 
 
 class CNN(BaseTorchSolution):
-    def __init__(self, device, file_name, act_dim, feat_dim):
+    def __init__(self, device, file_name, num_robots, act_dim, feat_dim):
         super(CNN, self).__init__(device)
         self.file_name = file_name
+        self.num_robots = num_robots
         self.act_dim = act_dim
         self.feat_dim = feat_dim
-        self.prev_x = torch.zeros((self.feat_dim, self.feat_dim, 3))
+        self.prev_xs = [torch.zeros((self.feat_dim, self.feat_dim, 3)) for _ in range(self.num_robots)]
         
         self.cnn = nn.Sequential(
             nn.Conv2d(
@@ -51,18 +52,18 @@ class CNN(BaseTorchSolution):
         )
         self.modules_to_learn.append(self.cnn)
 
-    def _get_action(self, obs):
+    def _get_action(self, robot_index, obs):
         x = torch.tensor(obs)
         x = torch.div(x, 255)
-        self.x_arg = torch.cat((x, self.prev_x), dim=2).unsqueeze(0)
-        self.prev_x = x
+        self.x_arg = torch.cat((x, self.prev_xs[robot_index]), dim=2).unsqueeze(0)
+        self.prev_xs[robot_index] = x
         self.x_arg = self.x_arg.permute(0, 3, 1, 2)
         output = self.cnn(self.x_arg)
         action = output.squeeze(0).cpu().numpy()
         return action
 
     def reset(self):
-        self.prev_x = torch.zeros((self.feat_dim, self.feat_dim, 3))
+        self.prev_xs = [torch.zeros((self.feat_dim, self.feat_dim, 3)) for _ in range(self.num_robots)]
     
     @staticmethod
     def to_heatmap(x):
